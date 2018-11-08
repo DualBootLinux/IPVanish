@@ -1,0 +1,168 @@
+#!/bin/bash
+#Edits are GPL3
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 
+   exit 1
+fi
+
+if [ $# -eq 0 ] || [ "$1" != "start" ] && [ "$1" != "stop" ] && [ "$1" != "status" ]; then
+  echo -e "\nUsage: $0 action"
+  echo "Actions: start - to start vpn service"
+  echo "         stop - to stop vpn service"
+  echo "         status - status of ipvanish"
+  echo -e "\nExample: $0 start\n"
+  exit
+fi
+
+
+ipv_config_url="http://files.ipvanish.com/ipvanish-openvpn-config.txt"
+
+if [ -f settings.conf ]; then
+  pref_ipv_user=`grep ipv_user settings.conf | awk '{print $3}'`
+  pref_ipv_server=`grep ipv_server settings.conf | awk '{print $3}'`
+  pref_ipv_proto=`grep ipv_proto settings.conf | awk '{print $3}'`
+fi
+
+check_internet() {
+  if ping -c 1 8.8.8.8 &> /dev/null; then
+    echo -e " - Internet connection test: PASS"
+  else
+    echo -e " - Internet connection test: FAIL"
+    echo -e " - Aborting :( \n"
+    exit
+  fi
+}
+
+check_dns() {
+  if host www.google.com &> /dev/null; then
+    echo -e " - DNS test: PASS"
+  else
+    echo -e " - DNS test: FAIL"
+    echo -e " - Aborting :( \n"
+    exit
+  fi
+}
+
+
+collect_args() {
+  [[ -n $pref_ipv_user ]] && read -p " - Enter your IPVanish username [$pref_ipv_user]: " ipv_user || read -p " - Enter your IPVanish username: " ipv_user
+  ipv_user=${ipv_user:-$pref_ipv_user}
+
+  while [[ $ipv_user == '' ]]
+  do
+    echo " x Username is mandatory"
+    read -p " - Enter your IPVanish username: " ipv_user
+  done
+
+  read -s -p " - Enter your IPVanish password: " ipv_secret
+
+  while [[ $ipv_secret == '' ]]
+  do
+    echo $'\n'" x Password is mandatory"
+    read -s -p " - Enter your IPVanish password: " ipv_secret
+  done
+
+  [[ -n $pref_ipv_server ]] && read -p $'\n'" - Enter VPN server name [$pref_ipv_server]: " ipv_server || read -p $'\n'" - Enter VPN server name: " ipv_server
+  ipv_server=${ipv_server:-$pref_ipv_server}
+
+  while [[ $ipv_server == '' ]]
+  do
+    echo " x VPN server is mandatory"
+    read -p " - Enter VPN server name: " ipv_server
+  done
+
+  [[ -n $pref_ipv_proto ]] && read -p " - Enter VPN protocol [$pref_ipv_proto]: " ipv_proto || read -p " - Enter VPN protocol: " ipv_proto
+  ipv_proto=${ipv_proto:-$pref_ipv_proto}
+
+  while [[ $ipv_proto != 'udp' && $ipv_proto != 'tcp' ]]
+  do
+    echo " x Protocol has to be either udp or tcp"
+    read -p " - Enter VPN protocol : " ipv_proto
+  done
+
+  if ! host $ipv_server &> /dev/null; then
+    echo -e $'\n'" x Server name did not resolve. Invalid or wrong server name. Aborting :( \n"
+    exit
+  fi
+
+cat >settings.conf <<EOF
+ipv_user = $ipv_user
+ipv_server = $ipv_server
+ipv_proto = $ipv_proto
+EOF
+
+cat >credentials.txt <<EOF
+$ipv_user
+$ipv_secret
+EOF
+}
+printipinfo () {
+    x=`dig TXT +short o-o.myaddr.l.google.com @ns1.google.com`
+    ipinfo=`echo $x | cut -d '"' -f2`
+    curl ipinfo.io/$ipinfo
+}
+
+connect_ipv () {
+  wget -q $ipv_config_url -O openvpn.conf
+  sed -i -e "s/SERVER/$ipv_server/g" openvpn.conf
+  sed -i -e "s/PROTOCOL/$ipv_proto/g" openvpn.conf
+  sed -i -e "s|PIDFILE|'$ipv_pidfile'|g" openvpn.conf
+  openvpn --config ~/ipvanish/openvpn.conf
+  sleep 3
+  if [ -f $ipv_pidfile ]; then
+    echo -e "\nVPN process started successfully"
+    printipinfo
+  fi
+}
+
+disconnect_ipv () {
+  if [ -f $ipv_pidfile ]; then
+    ipv_pid=`cat $ipv_pidfile`
+    echo -e "\nStopping VPN process with PID $ipv_pid \n"
+    kill -9 `cat $ipv_pidfile`
+    rm $ipv_pidfile
+  else
+    echo -e "\nNo VPN process is running\n"
+  fi
+}
+
+#Start Here
+
+if ! command -v openvpn &> /dev/null; then
+ #if [ "$1" != "status" ]; then
+    echo -e "\n x OpenVPN package is not installed or openvpn binary is not in standard PATH. Aborting..\n"
+    x=`dig TXT +short o-o.myaddr.l.google.com @ns1.google.com`
+    ipinfo=`echo $x | cut -d '"' -f2`
+    curl ipinfo.io/$ipinfo
+    exit
+ #fi
+fi
+
+cd ~/ipvanish
+[ -d run ] || mkdir run
+ipv_pidfile="$PWD/run/openvpn.pid"
+
+if [ "$1" == "start" ]; then
+  if [ -f $ipv_pidfile ]; then
+    ipv_pid=`cat $ipv_pidfile`
+    echo -e "\nA VPN process with PID $ipv_pid is already running. Aborting..\n"
+    printipinfo
+    exit
+  fi
+  echo -e "\nChecking Internet Connection"
+  check_internet
+  check_dns
+  echo -e "\nConnecting IPVanish VPN"
+  collect_args
+  connect_ipv
+fi
+
+if [ "$1" == "stop" ]; then
+  disconnect_ipv
+  printipinfo
+fi
+  
+if [ "$1" == "status" ]; then
+   printipinfo
+fi
+
