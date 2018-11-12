@@ -1,27 +1,86 @@
 #!/bin/bash
 #Edits are GPL3
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
+
+#cd to scrip directory
+DIRECTORY=`dirname $0`
+#cd $DIRECTORY
+#check if $0 is a link file
+if [[ -L "$0" ]]
+then
+  cd $(dirname `ls -al $0 | cut -d ">" -f2`) 
+else
+  cd $DIRECTORY
 fi
 
-if [ $# -eq 0 ] || [ "$1" != "start" ] && [ "$1" != "stop" ] && [ "$1" != "status" ]; then
-  echo -e "\nUsage: $0 action"
-  echo "Actions: start - to start vpn service"
-  echo "         stop - to stop vpn service"
-  echo "         status - status of ipvanish"
-  echo -e "\nExample: $0 start\n"
-  exit
-fi
 
+validarg1="start stop status help supported"
+RED="\033[0;31m\e[1m"
+NORMAL="\033[0m"
+GREEN="\033[0;32m\e[1m"
+BLACK="\033[0;30m\e[1m"
+FLASHING="\033[5m"
+currentIP=""
+initialIP=""
+tcheck=""
+action="$1"
+
+action="${action,,}"
 
 ipv_config_url="http://files.ipvanish.com/ipvanish-openvpn-config.txt"
 
-if [ -f settings.conf ]; then
-  pref_ipv_user=`grep ipv_user settings.conf | awk '{print $3}'`
-  pref_ipv_server=`grep ipv_server settings.conf | awk '{print $3}'`
-  pref_ipv_proto=`grep ipv_proto settings.conf | awk '{print $3}'`
+PATH=$PATH:/sbin:/usr/sbin
+
+if [[ $EUID -ne 0 ]]; then
+  echo -en $RED
+  echo -en $FLASHING
+  echo -e "$FLASHING Warning: This script must be run as root to START and START vpn\n"
+  echo -en $NORMAL
+  action="status"
+   
 fi
+
+#Define Main Functions
+
+getIP () {
+  x=`dig TXT +short o-o.myaddr.l.google.com @ns1.google.com`
+  ipinfo=`echo $x | cut -d '"' -f2`
+  currentIP=$ipinfo
+}
+
+printipinfo () {
+  echo -e $BLACK
+  echo -e "Current IP Information\n"
+  getIP
+  echo "IP: $currentIP"
+  echo -n "City: "
+  curl ipinfo.io/$currentIP/city
+  echo -e $NORMAL
+}
+
+displayoptions () {
+  echo -en "$RED"
+  echo -e "\nUsage: $0 (action) \n$NORMAL"
+  echo -e "Actions: $BLACK"
+  echo "          stop - to stop vpn service"
+  echo "          status - status of ipvanish"
+  echo "          help - displays program options"
+  echo "          start - Log into VPN."
+  echo -e "          supported - supported torrent engines $NORMAL"
+  echo -e "\nExample: $0$RED start $NORMAL\n"
+}
+
+displaysupported () {
+  echo -e "\nProgram supports startvpn for the following PTP Clients:"
+  echo -en $BLACK
+  echo "    Transmission"
+  echo "    Tixati"
+  echo "    KTorrent"
+  echo "    Deluge"
+  echo "    Vuze"
+  echo "    Frostwire"
+  echo -e "    uTorrent\n"
+  echo -en $NORMAL  
+}
 
 check_internet() {
   if ping -c 1 8.8.8.8 &> /dev/null; then
@@ -34,7 +93,7 @@ check_internet() {
 }
 
 check_dns() {
-  if host www.google.com &> /dev/null; then
+  if host www.ipvanish.com &> /dev/null; then
     echo -e " - DNS test: PASS"
   else
     echo -e " - DNS test: FAIL"
@@ -96,11 +155,7 @@ $ipv_user
 $ipv_secret
 EOF
 }
-printipinfo () {
-    x=`dig TXT +short o-o.myaddr.l.google.com @ns1.google.com`
-    ipinfo=`echo $x | cut -d '"' -f2`
-    curl ipinfo.io/$ipinfo
-}
+
 
 connect_ipv () {
   wget -q $ipv_config_url -O openvpn.conf
@@ -108,41 +163,31 @@ connect_ipv () {
   sed -i -e "s/PROTOCOL/$ipv_proto/g" openvpn.conf
   sed -i -e "s|PIDFILE|'$ipv_pidfile'|g" openvpn.conf
   openvpn --config ~/ipvanish/openvpn.conf
-  sleep 3
+  sleep 4
   if [ -f $ipv_pidfile ]; then
-    echo -e "\nVPN process started successfully"
     printipinfo
   fi
+}
+
+checker () {
+ tcheck=`ps -uax | grep -i 'transmission\|KTorrent\|Titati|Deluge|qBittorrent|Vuze|Frostwire|uTorrent' | wc -l`
+ return "$((tcheck-1))"
 }
 
 disconnect_ipv () {
   if [ -f $ipv_pidfile ]; then
     ipv_pid=`cat $ipv_pidfile`
-    echo -e "\nStopping VPN process with PID $ipv_pid \n"
-    kill -9 `cat $ipv_pidfile`
+    echo -e "\n$RED Stopping VPN process with PID $ipv_pid \n$NORMAL"
+    kill -9 `cat $ipv_pidfile` 2>/dev/null
     rm $ipv_pidfile
   else
-    echo -e "\nNo VPN process is running\n"
+    echo -e "\n$RED No VPN process is running\n$NORMAL"
   fi
 }
 
-#Start Here
-
-if ! command -v openvpn &> /dev/null; then
- #if [ "$1" != "status" ]; then
-    echo -e "\n x OpenVPN package is not installed or openvpn binary is not in standard PATH. Aborting..\n"
-    x=`dig TXT +short o-o.myaddr.l.google.com @ns1.google.com`
-    ipinfo=`echo $x | cut -d '"' -f2`
-    curl ipinfo.io/$ipinfo
-    exit
- #fi
-fi
-
-cd ~/ipvanish
-[ -d run ] || mkdir run
-ipv_pidfile="$PWD/run/openvpn.pid"
-
-if [ "$1" == "start" ]; then
+start () {
+  echo -en $BLACK
+  echo -e "Initial IP: $initialIP $NORMAL"
   if [ -f $ipv_pidfile ]; then
     ipv_pid=`cat $ipv_pidfile`
     echo -e "\nA VPN process with PID $ipv_pid is already running. Aborting..\n"
@@ -151,18 +196,101 @@ if [ "$1" == "start" ]; then
   fi
   echo -e "\nChecking Internet Connection"
   check_internet
-  check_dns
+  check_dns 
   echo -e "\nConnecting IPVanish VPN"
   collect_args
   connect_ipv
+}
+# Statements start Here
+
+getIP
+initialIP=$currentIP
+
+if [ "`echo $validarg1 | grep $action`" == "" ]; then
+  echo -e "$RED"
+  echo -e "Unknown (action) $action $NORMAL"
+  displayoptions
+  exit
 fi
 
-if [ "$1" == "stop" ]; then
-  disconnect_ipv
-  printipinfo
+if [ -f settings.conf ]; then
+  pref_ipv_user=`grep ipv_user settings.conf | awk '{print $3}'`
+  pref_ipv_server=`grep ipv_server settings.conf | awk '{print $3}'`
+  pref_ipv_proto=`grep ipv_proto settings.conf | awk '{print $3}'`
 fi
-  
-if [ "$1" == "status" ]; then
+
+if ! command -v openvpn &> /dev/null; then
+    echo -e "\n x OpenVPN package is not installed or openvpn binary is not in standard PATH. Aborting..\n"
+    printipinfo
+    exit
+fi
+
+cd ~/ipvanish
+[ -d run ] || mkdir run
+ipv_pidfile="$PWD/run/openvpn.pid"
+
+if [ "$action" == "stop" ]; then
+  if checker; then
+    if [ -f $ipv_pidfile ]; then
+      echo -en $GREEN
+      echo -e "\nNo PTP Client running, Stopping VPN\n$NORMAL"
+      sleep 3
+      disconnect_ipv
+    else
+      disconnect_ipv
+    fi
+  else
+    echo -en $RED
+    echo -e "\nYour PTP Client is still RUNNING!!"
+    echo -e "Once closed run command (ipvanish stop)\n$NORMAL"
+    exit 1
+  fi
+fi  
+
+if [ "$action" == "status" ]; then
    printipinfo
 fi
+
+if [ "$action" == "help" ]; then
+  displayoptions
+fi
+
+if [ "$action" == "supported" ]; then
+  displaysupported
+fi
+if [ "$action" == "start" ]; then
+  cd ~/ipvanish
+  ipv_pidfile="$PWD/run/openvpn.pid"
+  ipv_pid=$(cat $ipv_pidfile 2> /dev/null)
+  
+  if [ -f $ipv_pidfile ]; then
+    echo -en $GREEN
+    echo -e "\nVPN process is running"
+    printipinfo
+    echo -en $NORMAL
+    echo -e "ERROR: unable to verify IP change, run STOP first\n"
+    exit
+    
+  else
+    start
+    sleep 2
+    getIP
+    
+    if [ "$currentIP" == "$initialIP" ]; then
+    
+      echo -e $RED
+      echo "POSSIBLE INCORRECT PASSWORLD - TRY AGAIN"
+      echo -e "ERROR: IP HAS NOT CHANGED\n$NORMAL"
+      disconnect_ipv
+      exit 6                          #ERROR 6: IP DID NOT CHANGE - POSSIBLE WRONG PASSWORD
+    else
+      echo -en $GREEN
+      echo -e "\nVPN process started successfully"
+      echo -e $NORMAL
+    fi
+  fi
+
+
+fi
+
 
